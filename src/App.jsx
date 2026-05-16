@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import db from "./db.js";
 
 const HIP_OPTIONS     = ["No issues", "Mild tightness", "Moderate tightness", "Pain — backed off", "Pain — stopped"];
 const EFFORT_OPTIONS  = ["Very easy", "Easy", "Moderate", "Hard", "Too hard"];
@@ -38,24 +39,16 @@ const EMPTY = {
   circuitNotes: "", notes: "",
 };
 
-async function apiGet() {
-  const r = await fetch("/api/entries");
-  if (!r.ok) throw new Error("fetch failed");
-  return r.json();
+async function dbGet() {
+  return db.entries.orderBy("date").reverse().toArray();
 }
 
-async function apiSave(entry) {
-  const r = await fetch("/api/entries", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(entry),
-  });
-  if (!r.ok) throw new Error("save failed");
+async function dbSave(entry) {
+  await db.entries.put(entry);
 }
 
-async function apiDelete(id) {
-  const r = await fetch(`/api/entries/${id}`, { method: "DELETE" });
-  if (!r.ok) throw new Error("delete failed");
+async function dbDelete(id) {
+  await db.entries.delete(id);
 }
 
 export default function App() {
@@ -68,24 +61,27 @@ export default function App() {
   const fileRef = useRef();
 
   useEffect(() => {
-    apiGet().then(setLog).catch(() => setLog([]));
+    dbGet().then(setLog).catch(() => setLog([]));
   }, []);
 
   async function refreshLog() {
-    const entries = await apiGet();
+    const entries = await dbGet();
     setLog(entries);
   }
 
-  function exportLog() {
-    if (!log.length) return;
-    const json = JSON.stringify(log, null, 2);
-    const b64  = btoa(unescape(encodeURIComponent(json)));
-    const a = document.createElement("a");
-    a.href = "data:application/json;base64," + b64;
-    a.download = "running-log-" + todayStr() + ".json";
+  async function exportLog() {
+    const allEntries = await dbGet();
+    if (!allEntries.length) return;
+    const json = JSON.stringify(allEntries, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `training-log-${todayStr()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function handleImport(e) {
@@ -95,14 +91,16 @@ export default function App() {
     reader.onload = async (ev) => {
       try {
         const imported = JSON.parse(ev.target.result);
-        if (!Array.isArray(imported)) throw new Error("not array");
-        await Promise.all(imported.map(entry => apiSave(entry)));
+        if (!Array.isArray(imported)) throw new Error("not an array");
+        // bulkPut = upsert: existing entries with same id are replaced,
+        // new entries are added. Safe to run against a non-empty DB.
+        await db.entries.bulkPut(imported);
         await refreshLog();
-        setImportMsg("Imported " + imported.length + " entries");
-        setTimeout(() => setImportMsg(""), 3000);
+        setImportMsg(`Imported ${imported.length} entries`);
+        setTimeout(() => setImportMsg(""), 3500);
       } catch {
-        setImportMsg("Invalid file");
-        setTimeout(() => setImportMsg(""), 3000);
+        setImportMsg("Invalid file — must be a JSON backup from this app");
+        setTimeout(() => setImportMsg(""), 3500);
       }
     };
     reader.readAsText(file);
@@ -134,7 +132,7 @@ export default function App() {
     const existing = log.find(e => e.date === form.date);
     const entry    = { ...form, id: existing ? existing.id : Date.now() };
     try {
-      await apiSave(entry);
+      await dbSave(entry);
       setSaveErr(false);
       await refreshLog();
       setSaved(true);
@@ -147,7 +145,7 @@ export default function App() {
 
   async function deleteEntry(id) {
     try {
-      await apiDelete(id);
+      await dbDelete(id);
       setLog(prev => prev.filter(e => e.id !== id));
     } catch {
       setSaveErr(true);
@@ -192,8 +190,6 @@ export default function App() {
         .tab { background: none; border: none; color: #555; font-family: 'DM Sans', sans-serif; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; cursor: pointer; padding: 10px 16px; border-bottom: 2px solid transparent; transition: all .15s; }
         .tab.active { color: #e8ff47; border-bottom-color: #e8ff47; }
         .tab:hover:not(.active) { color: #aaa; }
-        .tab.plan-tab { color: #444; }
-        .tab.plan-tab:hover { color: #888; }
         .chip { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 9px 14px; font-size: 12px; cursor: pointer; transition: all .12s; color: #777; text-align: center; user-select: none; position: relative; }
         .chip:hover { border-color: #444; color: #ddd; }
         .sg { background: #0e1e12; border-color: #3ecf8e; color: #3ecf8e; }
@@ -221,6 +217,8 @@ export default function App() {
         .sc { background: #141414; border: 1px solid #1e1e1e; border-radius: 6px; padding: 16px 18px; }
         .bwrap { background: #1a1a1a; border-radius: 2px; height: 5px; width: 100%; margin-top: 8px; overflow: hidden; }
         .bfill { height: 100%; border-radius: 2px; transition: width .4s; }
+        .backup-note { background: rgba(232,255,71,0.03); border: 1px solid rgba(232,255,71,0.1); border-radius: 5px; padding: 10px 14px; font-size: 11px; color: #555; line-height: 1.6; }
+        .backup-note strong { color: #e8ff47; font-weight: 500; }
       `}</style>
 
       <div style={{ padding:"28px 24px 0", borderBottom:"1px solid #161616" }}>
@@ -368,7 +366,7 @@ export default function App() {
 
             {saveErr && (
               <div style={{ fontSize:11, color:"#ff9b4e", textAlign:"center" }}>
-                Save failed — check that the server is running (npm run dev).
+                Save failed — try refreshing the page.
               </div>
             )}
           </div>
@@ -376,12 +374,21 @@ export default function App() {
 
         {view === "log" && (
           <div>
-            <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:16, flexWrap:"wrap" }}>
+            <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:12, flexWrap:"wrap" }}>
               <button className="gbtn" disabled={log.length===0} onClick={exportLog}>Export backup</button>
               <button className="gbtn" onClick={() => fileRef.current?.click()}>Import backup</button>
               <input ref={fileRef} type="file" accept=".json" style={{ display:"none" }} onChange={handleImport} />
-              {importMsg && <span style={{ fontSize:11, color: importMsg.startsWith("Imported")?"#3ecf8e":"#ff5252" }}>{importMsg}</span>}
               <span style={{ marginLeft:"auto", fontSize:11, color:"#333" }}>{log.length} entries</span>
+            </div>
+
+            {importMsg && (
+              <div style={{ marginBottom:12, fontSize:12, color: importMsg.startsWith("Imported") ? "#3ecf8e" : "#ff5252" }}>
+                {importMsg}
+              </div>
+            )}
+
+            <div className="backup-note" style={{ marginBottom:16 }}>
+              <strong>Backup tip:</strong> Your data lives in this browser's storage. Export a backup before clearing browser data or switching devices. Import restores everything — existing entries are kept, imported ones are merged in.
             </div>
 
             {log.length === 0 && (
