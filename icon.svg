@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0e0e0e"/>
+  <rect x="0" y="0" width="512" height="6" fill="#e8ff47"/>
+  <text x="256" y="290" font-family="Arial Black, Impact, sans-serif" font-size="180" font-weight="900" text-anchor="middle" fill="#e8ff47">13.1</text>
+  <text x="256" y="370" font-family="Arial, sans-serif" font-size="48" font-weight="300" text-anchor="middle" fill="#555" letter-spacing="8">TRAINING</text>
+</svg>
