@@ -1,0 +1,5 @@
+node_modules/
+dist/
+training.db
+*.db-shm
+*.db-wal
